@@ -1,5 +1,5 @@
 @tool
-extends Texture2D
+extends Texture2DRD
 class_name MeshTextureRD
 
 var rd := RenderingServer.get_rendering_device()
@@ -15,7 +15,6 @@ var uniform_set_rid := RID()
 var index_buffer_rid := RID()
 var vertex_buffer_pos_rid := RID()
 var vertex_buffer_uv_rid := RID()
-var texture_rd := RenderingServer.texture_2d_placeholder_create()
 
 var uniform_tex: RDUniform = RDUniform.new()
 var vertex_attrs: Array[RDVertexAttribute]
@@ -115,7 +114,6 @@ func _notification(what: int) -> void:
 			rd.free_rid(vertex_buffer_pos_rid)
 		if vertex_buffer_uv_rid.is_valid():
 			rd.free_rid(vertex_buffer_uv_rid)
-		RenderingServer.free_rid(texture_rd)
 
 func update(force: bool = false) -> void:
 	if force:
@@ -228,18 +226,16 @@ func _reset_pipeline() -> void:
 	tex_format.texture_type = RenderingDevice.TEXTURE_TYPE_2D
 	tex_format.width = size.x
 	tex_format.height = size.y
-	tex_format.format = RenderingDevice.DATA_FORMAT_R8G8B8A8_SRGB
-	tex_format.usage_bits = RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT | RenderingDevice.TEXTURE_USAGE_COLOR_ATTACHMENT_BIT
-	
-	tex_format.add_shareable_format(RenderingDevice.DATA_FORMAT_R8G8B8A8_UNORM)
-	tex_format.add_shareable_format(RenderingDevice.DATA_FORMAT_R8G8B8A8_SRGB)
+	tex_format.format = RenderingDevice.DATA_FORMAT_R8G8B8A8_UNORM
+	tex_format.usage_bits = RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT | RenderingDevice.TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RenderingDevice.TEXTURE_USAGE_CAN_COPY_FROM_BIT
 
-	var tex_rid := rd.texture_create(tex_format, tex_view)
-	RenderingServer.texture_replace(texture_rd, RenderingServer.texture_rd_create(tex_rid) if tex_rid.is_valid() else RenderingServer.texture_2d_placeholder_create())
+	var new_rd_tex := rd.texture_create(tex_format, tex_view)
+	texture_rd_rid = new_rd_tex
+
 	if framebuffer_texture_rid.is_valid():
 		rd.free_rid(framebuffer_texture_rid)
 
-	framebuffer_texture_rid = tex_rid
+	framebuffer_texture_rid = new_rd_tex
 
 	var blend := RDPipelineColorBlendState.new()
 	blend.attachments.append(RDPipelineColorBlendStateAttachment.new())
@@ -267,9 +263,7 @@ func _reset_uniform() -> void:
 
 	uniform_tex.clear_ids()
 	uniform_tex.add_id(sampler_rid)
-	# We are rendering to srgb format texture, the uniform should use srgb view.
-	# Note: Some texture formats(R8, R8G8) don't have srgb view, so they are missing a sRGB -> linear conversion.
-	uniform_tex.add_id(RenderingServer.texture_get_rd_texture(base_texture.get_rid(), true))
+	uniform_tex.add_id(RenderingServer.texture_get_rd_texture(base_texture.get_rid(), false))
 
 	uniform_set_rid = UniformSetCacheRD.get_cache(shader_rid, 0, [uniform_tex])
 
@@ -295,8 +289,7 @@ func _draw_list() -> void:
 	]
 	var xform_bytes := xform_array.to_byte_array()
 
-	# We are rendering to srgb format texture, the clear color should use linear color.
-	var draw_list := rd.draw_list_begin(framebuffer_rid, RenderingDevice.DRAW_CLEAR_COLOR_ALL, [clear_color.srgb_to_linear()])
+	var draw_list := rd.draw_list_begin(framebuffer_rid, RenderingDevice.DRAW_CLEAR_COLOR_ALL, [clear_color])
 	rd.draw_list_bind_render_pipeline(draw_list, pipeline_rid)
 	rd.draw_list_bind_vertex_array(draw_list, vertex_array_rid)
 	rd.draw_list_bind_uniform_set(draw_list, uniform_set_rid, 0)
@@ -305,12 +298,3 @@ func _draw_list() -> void:
 	rd.draw_list_set_push_constant(draw_list, xform_bytes, len(xform_bytes))
 	rd.draw_list_draw(draw_list, index_array_rid.is_valid(), 1)
 	rd.draw_list_end()
-
-func _get_rid() -> RID:
-	return texture_rd
-
-func _get_width() -> int:
-	return size.x
-
-func _get_height() -> int:
-	return size.y
